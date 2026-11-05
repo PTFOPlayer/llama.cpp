@@ -148,12 +148,12 @@ void llama_model_deepseek32::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_deepseek32::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_deepseek32::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     const bool is_mla = hparams.is_mla();
     GGML_ASSERT(is_mla);
@@ -243,9 +243,9 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 cb(indexer_k, "indexer_k", il);
 
                 // perform Hadamard transform on indexer q and k
-                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_q);
+                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid[il], indexer_q);
                 cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_k);
+                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid[il], indexer_k);
                 cb(indexer_k, "indexer_k", il);
 
                 // store indexer keys to KV cache
@@ -271,7 +271,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
 
                 ggml_tensor * indexer_score = nullptr;
                 if (cparams.fused_lid) {
-                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn_dsa->get_kq_mask_lid());
+                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn_dsa->self_attn_mask_lid.raw);
                     cb(indexer_score, "indexer_score", il);
                     res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, indexer_score, il});
                 } else {
@@ -305,7 +305,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                     cb(indexer_score, "indexer_score", il);
 
                     // mask indexer scores
-                    ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_lid();
+                    ggml_tensor * indexer_kq_mask = inp_attn_dsa->self_attn_mask_lid.raw;
                     indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
                     cb(indexer_score, "indexer_score", il);
                 }
@@ -484,7 +484,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
 //   with shared expert, exactly as the trunk deepseek2 graph builds it) ->
 //   shared_head_norm (fallback output_norm) -> shared LM head.
 // The DSA indexer is not used at runtime.
-llama_model_deepseek32::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_deepseek32::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "DEEPSEEK32 MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "DEEPSEEK32 MTP currently only supports a single MTP block");
